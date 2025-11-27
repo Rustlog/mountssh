@@ -1,0 +1,704 @@
+#!/usr/bin/env bash
+
+# Copyright (C) 2026 Rustlog
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+#########################################################
+#
+#   mssh - mount + ssh any remote
+#
+#   Usage: mssh [FLAGS] [PROFILE]
+#
+#   Daily chores:
+#       mssh nas        -> mount + drop into  shell
+#       mssh -m termux  -> only mount phone locally
+#       mssh -s pi      -> only ssh into pi
+#
+#  @Github: https://github.com/Rustlog/mssh
+#  @Author: Rustlog
+#  @LICENSE: GPLv3
+#
+#  Profiles: ~/.config/mssh/[names]
+#
+#########################################################
+
+# Error on non-zero status -> exit, unset var, or cmd fails early in pipe
+builtin set -euo pipefail
+
+# Globals vars
+
+readonly D_CONFIG_DIR="${XDG_CONFIG_HOME:-"$HOME/.config"}/${THIS_SCRIPT_NAME}"
+readonly THIS_SCRIPT_NAME="${0##*/}"
+
+F_CONFIG_FILE=""
+PROFILE_NAME=""
+NO_COLOR=0
+VERBOSE=0
+FORCE_COLOR=0
+
+# Pretty logging
+function log() {
+    local _type="${1}" func_name="${2:-""}"
+    shift 2
+    local _color="" _t=""
+    if is_flag_disabled "$NO_COLOR" || \
+        is_flag_enabled "$FORCE_COLOR"; then
+        local -g _info_color="\033[38;2;85;255;126m" \
+            _warn_color="\033[38;2;255;170;10m" \
+            _error_color="\033[38;2;244;29;31m" \
+            _fatal_color="\033[5m\033[38;2;255;0;0m" \
+            _other_color="\033[38;2;251;255;208m" \
+            _nc="\033[0m"
+    else
+        _info_color="" _warn_color="" _error_color=""
+        _fatal_color="" _other_color="" _nc=""
+    fi
+    case "${_type}" in
+        info) _color="${_info_color:-""}" _t="*"    ;;
+        warn) _color="${_warn_color:-""}" _t="^"    ;;
+        error) _color="${_error_color:-""}" _t="!"  ;;
+        fatal) _color="${_fatal_color:-""}" _t="#"  ;;
+        *) _color="${_other_color-""}" _t=""        ;;
+    esac
+
+    if [[ $VERBOSE -eq 1 ]]; then
+        printf "[%b%s%b%s]: %s: %b\n" \
+            "${_color}" "${_type}" "${_nc}" "${_t}" \
+            "${func_name:-"${FUNCNAME[1]}"}()" "${*}"
+    else
+        printf "[%b%s%b%s]: %b\n" \
+            "${_color}" "${_type}" "${_nc}" "${_t}" "${*}"
+    fi
+
+    [[ "${_type}" =~ ^(error|fatal)$ ]] && exit 1 || true
+}
+
+# Set colors on terminal, disable when piped
+function SetColors() {
+    RED="" GREEN="" BLUE="" DEBUG_GRAY=""
+    LITTLE_BLUE="" CMD_INFO="" YELLOW=""
+    SKIN_COL="" GRAY="" ORANGE="" NC=""
+    export RED GREEN BLUE DEBUG_GRAY \
+            LITTLE_BLUE CMD_INFO YELLOW \
+                SKIN_COL GRAY ORANGE NC
+
+    { is_flag_disabled "$NO_COLOR" || \
+        is_flag_enabled "$FORCE_COLOR"; } || return 0
+
+    RED="\033[38;2;255;75;75m"
+    GREEN="\033[38;2;138;230;81m"
+    BLUE="\033[38;2;110;147;235m"
+    DEBUG_GRAY="\033[38;2;200;200;200m"
+    LITTLE_BLUE="\033[38;2;126;117;255m"
+    CMD_INFO="\033[38;2;166;54;244m"
+    YELLOW="\033[38;2;226;220;120m"
+    SKIN_COL="\033[38;2;170;170;127m"
+    GRAY="\033[38;2;125;125;125m"
+    ORANGE="\033[38;2;255;170;10m"
+    NC="\033[0m"
+}
+
+# Overview of this script's usage
+function ShowUsage() {
+    local RED="" GREEN="" YELLOW="" BLUE="" LIGHT_BLUE="" BOLD="" NC=""
+    if is_flag_disabled "$NO_COLOR" || \
+        is_flag_enabled "$FORCE_COLOR"; then
+        local RED="\033[0;31m" GREEN="\033[0;32m" YELLOW="\033[38;2;212;184;142m" \
+            BLUE="\033[38;2;126;117;255m" LIGHT_BLUE="\033[38;2;146;165;200m" \
+            BOLD="\033[1m" NC="\033[0m"
+    fi
+
+    local name="${YELLOW}${THIS_SCRIPT_NAME}${NC}"
+
+    DrawBanner && printf '\n'
+    printf '%b\n' \
+        "  ${BOLD}${LIGHT_BLUE}${name}${NC}${BOLD}${LIGHT_BLUE} - \
+sshfs + ssh tool to automate boring ssh related tasks${NC}" \
+        "" \
+        "${BOLD}Usage:${NC}" \
+        "  ${name} [flags] ${GREEN}[profile]${NC}" \
+        "" \
+        "${BOLD}Main actions${NC}"
+    printf "    ${GREEN}%-20s${NC}          %b\n" \
+        "-s,--ssh"                  "ssh into remote" \
+        "-m,--mount"                "only mount remote filesystem" \
+        "-ms,--ssh-and-mount"       "mount locally -> drop into remote shell" \
+        "" ""
+    printf '%b\n' "${BOLD}Other actions${NC}:"
+    printf "    ${GREEN}%-20s${NC}          %b\n" \
+        "-l,--list"                 "list all profiles with comments" \
+        "-e,--edit"                 "edit/create profile" \
+        "-d,--delete"               "delete profile" \
+        "-c,--comment \"msg\""      "add a description when creating new profile" \
+        "-a,--append-key"           "append public keys to remote for passwordless authentication" \
+        "-p,--profile NAME"         "choose profile (mandatory unless -l|--cat)" \
+        "--cat"                     "raw cat profile" \
+        "--show"                    "pretty print loaded profile" \
+        "" ""
+    printf '%b\n' "${BOLD}Extras${NC}:"
+    printf "    ${GREEN}%-20s${NC}          %b\n" \
+        "-v,--verbose"              "enable verbose mode" \
+        "-I,--install"              "install this tool at /usr/local/bin/${THIS_SCRIPT_NAME,,}" \
+        "   --no-color"             "monochrome mode" \
+        "-C,--color"                "force color even when piped" \
+        "-h,--help"                 "show this and exit" \
+        "" ""
+    printf '%b\n' "${BOLD}Examples${NC}:" \
+        "  ${name} -e -p nas        ${BLUE}# create Raspberry Pi profile${NC}" \
+        "  ${name} -sm nas          ${BLUE}# mount + ssh (daily driver)${NC}" \
+        "  ${name} -e pi            ${BLUE}# edit Raspberry Pi profile${NC}" \
+        "  ${name} --ssh -a pi      ${BLUE}# append pub keys first then ssh into remote${NC}" \
+        "  ${name} -l               ${BLUE}# show available profiles${NC}" \
+        "" \
+        "Config lives in ${BLUE}$(ColorPath "${D_CONFIG_DIR}")${NC}/*" \
+        ""
+}
+
+# HELPER function -- Variable is not empty
+function require_var() {
+    local var="${1:-""}" _type="${2:-""}" msg="${3:-""}"
+    [[ -n "${var}" ]] && return 0
+    [[ -n "${msg}" ]] && log "${_type}" "${FUNCNAME[1]}" "${msg}"
+    return 1
+}
+
+# HELPER function -- Is array and not empty
+function require_arr() {
+    local -n arr_ref=${1}
+    if declare -p "${!arr_ref}" | \
+        grep 'declare -a' &> /dev/null && \
+        (( ${#arr_ref[@]} > 0 )); then
+        return 0
+    fi
+    return 1
+}
+
+# HELPER function -- Check file existance
+function require_file() {
+    local file="${1}" _type="${2:-""}" msg="${3:-""}"
+    [[ -s "${file}" ]] && return 0
+    [[ -n "${msg}" ]] && log "${_type}" "${FUNCNAME[1]}" "${msg}"
+    return 1
+}
+
+# HELPER function -- Check enabled state
+function is_flag_enabled() {
+    local -i var=${1}
+    [[ "$var" -eq 1 ]] && return 0
+    return 1
+}
+
+# HELPER function -- Check disabled state
+function is_flag_disabled() {
+    local -i var=${1}
+    [[ "$var" -eq 0 ]] && return 0
+    return 1
+}
+
+# Color given blue
+function ColorPath() {
+    printf '%b\n' "${LITTLE_BLUE}${1//$HOME/\~}${NC}"
+}
+
+# Pornify commands with asm
+function ColorCMD() {
+    ! command -v bat &> /dev/null && printf '%b\n' "${1}"
+    bat --color="$({ \
+        is_flag_disabled "$NO_COLOR" || \
+        is_flag_enabled "${FORCE_COLOR}"; } && \
+        printf '%s\n' always || printf '%s\n' never\
+    )" --decorations=never \
+        --paging=never --language=asm <<< "${1//"$HOME"/\~}"
+}
+
+# Draw ASCII banner
+function DrawBanner() {
+    printf "%b\n" "${YELLOW}==========================" \
+                           "║ SSHFS Mount Utility    ║" \
+                           "==========================${NC}"
+}
+
+# Special message for termux users
+function TermuxUser() {
+    log info "" "The termux default user home directory" \
+        "'${LITTLE_BLUE}${LOCAL_MOUNT_POINT}/data/data/com.termux/files/home${NC}'"
+    log info "" "Phone's internal stroage filesystem" \
+        "'${LITTLE_BLUE}${LOCAL_MOUNT_POINT}/storage/emulated/0/${NC}'"
+}
+
+# Find and show available profiles in profile directory
+function ListAvailableProfiles() {
+    [[ -n "$(find "${D_CONFIG_DIR}" -type f -print -quit)" ]] || \
+        { log "" warn "No profiles available under '$(ColorPath "${D_CONFIG_DIR}")/*'"; \
+            return 1; }
+
+    printf '%s\n' "Available profiles under '$(ColorPath "${D_CONFIG_DIR}")/*'"
+    for profile in "${D_CONFIG_DIR}"/*; do
+        printf '    %-20s %10s %s\n' "${profile##*/}" "=" "$({ \
+            require_file "${profile}" && \
+            { grep -o 'COMMENT = .*' "${profile}" | \
+                cut -d'=' -f2 || \
+                printf '%s\n' "[No comment]"; } \
+        ;})"
+    done
+    require_var "${F_CONFIG_FILE}" || return 1
+}
+
+# Show pretty formated profile
+function ShowProfile() {
+    printf '%b\n' \
+        "#================#" \
+        "# Profile: $(ColorPath "${F_CONFIG_FILE}") #" \
+        "#=============#==========================#"
+    printf "# ${GRAY}%b${NC}\n# ${ORANGE}%-40b${NC} = %b\n\n" \
+        "# SSH user on remote (default 'root')" \
+        "REMOTE_USER"               "${REMOTE_USER:-"[empty]"}" \
+        "# IP or FQDN (Fully Qualified Domain Name, e.g. ssh.example.com) addresss" \
+        "REMOTE_HOST"               "${REMOTE_HOST:-"[empty]"}" \
+        "# Open port on remote (default 22)" \
+        "SSH_PORT"                  "${SSH_PORT:-"[empty]"}" \
+        "# Remote path to be mounted locally (default /)" \
+        "REMOTE_MOUNT_POINT"        "${REMOTE_MOUNT_POINT:-"[empty]"}" \
+        "# Local path to mount remote filesystem (default /tmp/mount-[PROFILE_NAME])" \
+        "LOCAL_MOUNT_POINT"         "${LOCAL_MOUNT_POINT:-"[empty]"}" \
+        "# Path to private key if remote requires PubKeyAuthentication" \
+        "IDENTITY_FILE"             "${IDENTITY_FILE:-"[empty]"}" \
+        "# Public key for --apped-key flag, default is \${IDENTITY_FILE}.pub" \
+        "PUB_KEY"                   "${PUB_KEY:-"[empty]"}" \
+        "# ssh command for sshfs -ossh_command='SSH_COMMAND'" \
+        "SSH_COMMAND"               "${SSH_COMMAND:-"[empty]"}" \
+        "# Additional flags for sshfs command" \
+        "SSHFS_FLAGS"               "( ${SSHFS_FLAGS[*]} )" \
+        "# Additional flags for ssh command" \
+        "SSH_FLAGS"                 "( ${SSH_FLAGS[*]} )" \
+        "# Default action on 'mssh [profile]'" \
+        "DEFAULT_ACTION"            "${DEFAULT_ACTION:-"[empty]"}" \
+        "# Network check timeout (default 1sec)" \
+        "PING_TIMEOUT"              "${PING_TIMEOUT:-"[empty]"}" \
+        "# Timeout for locally mouted remote ( default 0 = inf)" \
+        "MOUNT_TIMEOUT"             "${MOUNT_TIMEOUT:-"[empty]"}"
+}
+
+# Use bat command to show colorful profile, fallback to cat if bat not available
+function CatProfile() {
+    ! command -v bat &> /dev/null && { cat "${F_CONFIG_FILE}"; return 0; }
+    bat --color="$({ \
+        is_flag_disabled "$NO_COLOR" || \
+            is_flag_enabled "$FORCE_COLOR"; } && \
+        printf '%s\n' always || printf '%s\n' never \
+    )" --decorations=never --paging=never --language=bash "${F_CONFIG_FILE}"
+}
+
+# Delete requested profile
+function DeleteProfile() {
+    cd "${D_CONFIG_DIR}" || log error "" \
+        "Failed to chdir into '${D_CONFIG_DIR}'"
+    if rm ./"${PROFILE_NAME}"; then
+        log info "" "Profile deleted '${PROFILE_NAME}'"
+    else
+        log error "" "Failed to delete '${PROFILE_NAME}'"
+    fi
+}
+
+# Check if remote is alive
+function PingRemote() {
+    ping -W "${PING_TIMEOUT}" -c 1 "${REMOTE_HOST}" &> /dev/null || \
+        log error "" "Host unreachable '${REMOTE_HOST}'"
+}
+
+# Check mount check, if mounted return 0
+function CheckMountPoint() {
+    mountpoint "${LOCAL_MOUNT_POINT}" &> /dev/null && return 0
+    return 1
+}
+
+function AppendKey() {
+    require_var "${SSH_PORT}" error \
+        "SSH port is missing, Failed to append keys"
+    require_var "${REMOTE_USER}" error \
+        "Remote user is missing, Failed to append keys"
+    require_var "${REMOTE_HOST}" error \
+        "Remote host is missing, Failed to append keys"
+    require_var "${IDENTITY_FILE}" error \
+        "Identity file is missing, could not append keys"
+
+    local F="\~/.ssh/authorized_keys"
+    if ssh "ssh://${REMOTE_USER}@${REMOTE_HOST}:${SSH_PORT}" \
+        "cat >> ~/.ssh/authorized_keys" < "${IDENTITY_FILE//\~/"$HOME"}.pub"; then
+        log info "" "Publick key '${IDENTITY_FILE//"$HOME"/\~}.pub'" \
+            "append in $F at '${REMOTE_HOST}'"
+    else
+        log info "" "Failed to append public key '${IDENTITY_FILE//"$HOME"/\~}.pub'" \
+            "in $F at remote '${REMOTE_HOST}'"
+    fi
+}
+
+# Build sshfs cmd array
+function BuildSSHFS_CMD() {
+    local -n arr_ref
+    arr_ref=${1}
+
+    arr_ref=()
+
+    require_var "${REMOTE_USER}" error "Remote user is missing"
+    require_var "${REMOTE_HOST}" error "Remote host is missing"
+    require_var "${REMOTE_MOUNT_POINT}" error "Remote mountpoint is missing"
+    require_var "${LOCAL_MOUNT_POINT}" error "Local mount point is missing"
+
+    arr_ref+=( "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_MOUNT_POINT}" )
+    arr_ref+=( "${LOCAL_MOUNT_POINT}" )
+
+    require_var "${SSH_COMMAND}" && arr_ref+=( "-ossh_command=${SSH_COMMAND}" )
+    require_var "${SSH_PORT}" && arr_ref+=("-oPort=${SSH_PORT}")
+    require_arr SSHFS_FLAGS && arr_ref+=( "${SSHFS_FLAGS[@]}" ) || true
+}
+
+# Build ssh cmd array
+function BuildSSH_CMD() {
+    local -n arr_ref
+    arr_ref=${1}
+
+    arr_ref=()
+
+    require_arr SSH_FLAGS && arr_ref+=( "${SSH_FLAGS[@]}" ) || true
+
+    require_var "${SSH_PORT}" error "SSH port is missing"
+    require_var "${REMOTE_USER}" error "Remote user is missing"
+    require_var "${REMOTE_HOST}" error "Remote host is missing"
+
+    require_var "${IDENTITY_FILE}" && arr_ref+=( "-i" "${IDENTITY_FILE//\~/"$HOME"}" )
+
+    arr_ref+=( "ssh://${REMOTE_USER}@${REMOTE_HOST}:${SSH_PORT}" )
+}
+
+# Meta template for newly generated profile
+function WriteTemplateProfile() {
+    local comment="${1:-""}"
+    require_var "${comment}" && comment=" ${comment}"
+    if cat 1> "${F_CONFIG_FILE}" << EOF
+#!/usr/bin/env false
+
+#@# === ( Profile: '${F_CONFIG_FILE//$HOME/\~})' ) === #@#
+
+# COMMENT =${comment}
+
+### Configuration file for ssh and sshfs
+
+# SSH user on remote (default 'root')
+REMOTE_USER="root"
+
+# IP or FQDN (Fully Qualified Domain Name, e.g. ssh.example.dev) addresss
+REMOTE_HOST=""
+
+# Open port on remote (default 22)
+SSH_PORT="22"
+
+# Remote path to be mounted locally (default /)
+REMOTE_MOUNT_POINT="/"
+
+# Local path to mount remote filesystem (default /tmp/mount-[PROFILE_NAME])
+LOCAL_MOUNT_POINT="/tmp/mount_${PROFILE_NAME}"
+
+# Path to private key if remote requires PubKeyAuthentication
+IDENTITY_FILE=""
+# Public key for --apped-key flag, default is \${IDENTITY_FILE}.pub
+PUB_KEY=""
+
+# ssh command for sshfs -ossh_command='SSH_COMMAND'
+SSH_COMMAND="ssh"
+
+# Additional flags for sshfs command
+# e.g. -oreconnet
+SSHFS_FLAGS=( )
+
+# Additional flags for ssh command
+# e.g. -4
+SSH_FLAGS=( )
+
+# Default action on 'mssh [profile]'
+# both=(mount+ssh), ssh=ssh, mount=mount
+DEFAULT_ACTION="both"
+
+# Network check timeout (default 1sec)
+PING_TIMEOUT=1
+
+# Timeout for locally mouted remote ( default 0 = inf)
+MOUNT_TIMEOUT=0
+
+# vim: sts=4 sw=4 et:
+
+EOF
+    then
+        log info "" \
+            "New config profile created at '$(ColorPath "${F_CONFIG_FILE}")'"
+    else
+        log info "" \
+            "Failed to create profile at '$(ColorPath "${F_CONFIG_FILE}")'"
+    fi
+}
+
+# Validate every key existance in profile, if a key is missing yell in terminal
+function ValidateProfile() {
+    local -a key_value_pairs=(
+        REMOTE_USER REMOTE_HOST REMOTE_MOUNT_POINT
+        SSH_PORT LOCAL_MOUNT_POINT IDENTITY_FILE
+        SSH_COMMAND PING_TIMEOUT MOUNT_TIMEOUT
+        SSH_FLAGS SSHFS_FLAGS PUB_KEY
+    )
+
+    # shellcheck disable=SC1090
+    source "${F_CONFIG_FILE}"
+
+    for key in "${key_value_pairs[@]}"; do
+        declare -p "${key}" &> /dev/null || \
+            log error "" "'${key}' not found in profile," \
+            "regenerate profile or add the '${key}' in profile"
+        if [[ "${key}" == "REMOTE_HOST" ]]; then
+            [[ "${!key}" == "0.0.0.0" ]] && \
+                log error "" \
+                "Invalid host found in profile " \
+                "('${PROFILE_NAME}')," \
+                "error = '${key}=${!key}'"
+            require_var "${!key}" || log error "" "${key} var is empty"
+        fi
+    done
+}
+
+# Edit profile using $EDITOR var, fallback to vim
+function EditProfile() {
+    "${EDITOR:-"vim"}" "${F_CONFIG_FILE}"
+}
+
+# Unmount remote
+function UnMountRemote() {
+    if fusermount -u "${LOCAL_MOUNT_POINT}"; then
+        log info "" "Successfully unmounted remote" \
+"(Host: '${REMOTE_HOST}', \
+RemoteMount: '${REMOTE_MOUNT_POINT}', \
+LocalMountPoint: '${LOCAL_MOUNT_POINT}')"
+        rmdir "${LOCAL_MOUNT_POINT}" || \
+            log error "" \
+            "Failed to clean up dir: $(ColorPath "${LOCAL_MOUNT_POINT}")"
+    else
+        log error "" "Failed to unmount reomte '${LOCAL_MOUNT_POINT}'"
+    fi
+}
+
+# Mount remote locally using fuse
+function MountRemote() {
+    local -n sshfs_cmd_ref
+    sshfs_cmd_ref=${1}
+
+    CheckMountPoint && UnMountRemote
+
+    mkdir -p "${LOCAL_MOUNT_POINT}"
+    log info "" "Mounting remote '${REMOTE_HOST}' from '$(ColorPath "${F_CONFIG_FILE}")'"
+    log cmd_info "" "$(ColorCMD "sshfs ${sshfs_cmd_ref[*]}")"
+    if sshfs "${sshfs_cmd_ref[@]}"; then
+        log info "" \
+            "Mounted remote '${REMOTE_USER}@${REMOTE_HOST}' at '${LOCAL_MOUNT_POINT}'"
+    else
+        log info "" \
+            "Failed to mount remote '${REMOTE_USER}@${REMOTE_HOST}' at '${LOCAL_MOUNT_POINT}'"
+    fi
+    (( "$MOUNT_TIMEOUT" != "0" )) || return 0
+    log info "" "Remote at '${LOCAL_MOUNT_POINT}' will be unmounted after '$MOUNT_TIMEOUT'"
+    (sleep "${MOUNT_TIMEOUT}" && printf '\n' && UnMountRemote) & disown
+}
+
+# Directly ssh into remote
+function SSHRemote() {
+    local -n ssh_cmd_ref
+    ssh_cmd_ref=${1}
+    [[ "${REMOTE_USER}" == u0_a* ]] && TermuxUser
+    log cmd_info "" "$(ColorCMD "ssh ${ssh_cmd_ref[*]}")"
+    ssh "${ssh_cmd_ref[@]}"
+}
+
+# Main function
+function main() {
+    local -a args=("${@}")
+
+    local -i do_ssh_only=0 do_mount_only=0 \
+        do_mount_and_ssh=0 show_profile=0 show_usage=0 \
+            cat_profile=0 override_no_color=0 edit_profile=0 \
+                override_force_color=0  delete_profile=0  append_keys=0 \
+                    list_available_profiles=0 override_verbose=0 \
+                        do_unmount=0
+
+    # shellcheck disable=SC2034
+    local -a sshfs_cmd=()
+    # shellcheck disable=SC2034
+    local -a ssh_cmd=()
+
+    local requested_profile_name="" comment="" msg=""
+
+    # Return if no argument passed
+    [[ ${#args[@]} -ne 0 ]] || return 1
+
+    # Check if last parameter is a profile
+    last_arg="${args[$((${#args[@]}-1))]}"
+    for profile in "${D_CONFIG_DIR}"/*; do
+        [[ "${last_arg}" == "${profile##*/}" ]] && \
+            requested_profile_name="${profile##*/}" \
+            args=("${args[@]:0:$((${#args[@]} - 1))}")
+    done
+
+    # Custom arg parser
+    local arg="" value=""
+    for ((i=0;i<${#args[@]};i++)); do
+        arg="${args[$i]}"
+        [[ -n "${args[$((i+1))]:-""}" && "${args[$((i+1))]:-""}" != -* ]] && \
+            value="${args[$((i+1))]:-""}" i=$((i+1))
+        if [[ "${arg}" == *=* ]]; then
+            IFS=$'=' read -r arg value <<< "${arg}"
+            [[ -n "${value}" ]] || \
+                { log error "'${arg}' requires a value"; return 1; }
+        fi
+        case "${arg}" in
+            -s|--ssh)           do_ssh_only=1                      ;;
+            -m|--mount)         do_mount_only=1                    ;;
+            -u|--u*mount)       do_unmount=1                       ;;
+            -ms|--mount*ssh)    do_mount_and_ssh=1                 ;;
+            -sm|--ssh*mount)    do_mount_and_ssh=1                 ;;
+            --show)             show_profile=1                     ;;
+            --cat)              cat_profile=1                      ;;
+            -e|--edit)          edit_profile=1                     ;;
+            --no-color)         override_no_color=1                ;;
+            -C|--color)         override_force_color=1             ;;
+            -d|--delete)        delete_profile=1                   ;;
+            -h|--help)          show_usage=1                       ;;
+            -l|--list)          list_available_profiles=1          ;;
+            -v|--verbose)       override_verbose=1                 ;;
+            -a|--append*)       append_keys=1                      ;;
+            -c|--comment)       comment="${value}"                 ;;
+            -p|--profile)       require_var "${requested_profile_name}" || \
+                                requested_profile_name="${value}"  ;;
+            -*) log error "" "Unknown argument '${arg}'"           ;;
+            *)                  requested_profile_name="${value}"  ;;
+        esac
+    done
+
+    mkdir -p "${D_CONFIG_DIR}"
+
+     # Global Overrides
+    { is_flag_enabled "$override_no_color" || [[ ! -t 1 ]]; } && \
+        NO_COLOR=1
+    is_flag_enabled "$override_force_color" && FORCE_COLOR=1
+    is_flag_enabled "$override_verbose" && VERBOSE=1
+
+    # Enable colors
+    SetColors
+
+    # Show Usage
+    is_flag_enabled "$show_usage" && { ShowUsage; return 0; }
+
+    # List available profiles
+    is_flag_enabled "$list_available_profiles" && ListAvailableProfiles
+
+    # Set F_CONFIG_FILE absolute path
+    require_var "${requested_profile_name}" error \
+        "No profile given, terminating" && \
+            F_CONFIG_FILE="${D_CONFIG_DIR}/${requested_profile_name}" \
+            PROFILE_NAME="${requested_profile_name}"
+
+    # Cat profile
+    is_flag_enabled "$cat_profile" && \
+        { CatProfile; return 0; }
+
+    # Delete profile
+    is_flag_enabled "$delete_profile" && \
+        { DeleteProfile; return 0; }
+
+    # Create new profile if it doesn't exist
+    if is_flag_enabled "$edit_profile" && \
+        ! require_file "${F_CONFIG_FILE}"; then
+        WriteTemplateProfile "${comment}"
+    fi
+
+    # Requested profile must exist
+    require_file "${F_CONFIG_FILE}" error \
+        "Config profile '${F_CONFIG_FILE}' not found"
+
+    # Edit profile
+    is_flag_enabled "$edit_profile" && \
+        { EditProfile; return 0; }
+
+    # Validate requested profile
+    ValidateProfile "${F_CONFIG_FILE}" || return 1
+
+    # Source profile
+    # shellcheck disable=SC1090
+    source "${F_CONFIG_FILE}"
+
+    # Show profile
+    is_flag_enabled "$show_profile" && \
+        { ShowProfile; return 0; }
+
+    # Unmount on request
+    is_flag_enabled "$do_unmount" && \
+        { CheckMountPoint && UnMountRemote; return 0; }
+
+    # Remote is alive and listening
+    PingRemote || return 1
+
+    # Append pub key to remote
+    is_flag_enabled "$append_keys" && AppendKey
+
+    if is_flag_enabled "$do_mount_and_ssh" || \
+        # Mount and SSH
+        [[ "${DEFAULT_ACTION}" == "both" ]]; then
+        msg="Mount and SSH into remote"
+        { require_var "${DEFAULT_ACTION}" && \
+            is_flag_disabled "$do_mount_and_ssh"; } && \
+                msg="${msg} (default action)"
+        is_flag_enabled "$VERBOSE" && \
+            printf '\n%s\n' "=> ${msg} <=" && printf '\n'
+        # Mount remote locally
+        BuildSSHFS_CMD sshfs_cmd
+        MountRemote sshfs_cmd
+        # SSH into remote
+        printf '%s\n' "=> SSH"
+        BuildSSH_CMD ssh_cmd
+        SSHRemote ssh_cmd
+    elif is_flag_enabled "$do_ssh_only" || \
+        # SSH only
+        [[ "${DEFAULT_ACTION}" == "ssh" ]]; then
+        msg="SSH only"
+        { require_var "${DEFAULT_ACTION}" && \
+            is_flag_disabled "$do_ssh_only"; } && \
+                msg="${msg} (default action)"
+        is_flag_enabled "$VERBOSE" && \
+            printf '\n%s\n' "=> ${msg} <=" && printf '\n'
+        BuildSSH_CMD ssh_cmd
+        SSHRemote ssh_cmd
+    elif is_flag_enabled "$do_mount_only" || \
+        # Mount only
+        [[ "${DEFAULT_ACTION}" == "mount" ]]; then
+        msg="Mount only"
+        { require_var "${DEFAULT_ACTION}" && \
+            is_flag_disabled "$do_mount_only"; } && \
+                msg="${msg} (default action)"
+        is_flag_enabled "$VERBOSE" && \
+            printf '\n%s\n' "=> ${msg} <=" && printf '\n'
+        BuildSSHFS_CMD sshfs_cmd
+        MountRemote sshfs_cmd
+    fi
+
+    return 0
+}
+
+# Main entry
+main "${@}"
+
