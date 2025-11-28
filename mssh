@@ -122,45 +122,42 @@ function ShowUsage() {
 
     local name="${YELLOW}${THIS_SCRIPT_NAME}${NC}"
 
-    DrawBanner && printf '\n'
     printf '%b\n' \
+        "" \
         "  ${BOLD}${LIGHT_BLUE}${name}${NC}${BOLD}${LIGHT_BLUE} - \
 sshfs + ssh tool to automate boring ssh related tasks${NC}" \
         "" \
-        "${BOLD}Usage:${NC}" \
+        "${BOLD}usage:${NC}" \
         "  ${name} [flags] ${GREEN}[profile]${NC}" \
         "" \
-        "${BOLD}Main actions${NC}"
-    printf "    ${GREEN}%-20s${NC}          %b\n" \
-        "-s,--ssh"                  "ssh into remote" \
-        "-m,--mount"                "only mount remote filesystem" \
-        "-ms,--ssh-and-mount"       "mount locally -> drop into remote shell" \
-        "" ""
-    printf '%b\n' "${BOLD}Other actions${NC}:"
-    printf "    ${GREEN}%-20s${NC}          %b\n" \
-        "-l,--list"                 "list all profiles with comments" \
-        "-e,--edit"                 "edit/create profile" \
-        "-d,--delete"               "delete profile" \
-        "-c,--comment \"msg\""      "add a description when creating new profile" \
-        "-a,--append-key"           "append public keys to remote for passwordless authentication" \
-        "-p,--profile NAME"         "choose profile (mandatory unless -l|--cat)" \
-        "--cat"                     "raw cat profile" \
-        "--show"                    "pretty print loaded profile" \
-        "" ""
-    printf '%b\n' "${BOLD}Extras${NC}:"
-    printf "    ${GREEN}%-20s${NC}          %b\n" \
-        "-v,--verbose"              "enable verbose mode" \
-        "-I,--install"              "install this tool at /usr/local/bin/${THIS_SCRIPT_NAME,,}" \
-        "   --no-color"             "monochrome mode" \
-        "-C,--color"                "force color even when piped" \
-        "-h,--help"                 "show this and exit" \
-        "" ""
-    printf '%b\n' "${BOLD}Examples${NC}:" \
-        "  ${name} -e -p nas        ${BLUE}# create Raspberry Pi profile${NC}" \
-        "  ${name} -sm nas          ${BLUE}# mount + ssh (daily driver)${NC}" \
-        "  ${name} -e pi            ${BLUE}# edit Raspberry Pi profile${NC}" \
-        "  ${name} --ssh -a pi      ${BLUE}# append pub keys first then ssh into remote${NC}" \
-        "  ${name} -l               ${BLUE}# show available profiles${NC}" \
+        "${BOLD}main actions${NC}" \
+        "   -s,--ssh              ssh into remote" \
+        "   -m,--mount            only mount remote filesystem" \
+        "   -ms,--ssh-and-mount   mount locally -> drop into remote shell" \
+        "" \
+        "${BOLD}other actions${NC}:" \
+        "   -l,--list             list all profiles with comments" \
+        "   -e,--edit             edit/create profile" \
+        "   -d,--delete           delete profile" \
+        "   -c,--comment \"msg\"    add a description when creating new profile" \
+        "   -a,--append-key       append public key -> passwordless" \
+        "   -p,--profile NAME     choose profile (mandatory unless -l|--cat)" \
+        "   --cat                 raw cat profile" \
+        "   --show                pretty print loaded profile" \
+        "" \
+        "${BOLD}extras${NC}:" \
+        "   -v,--verbose          enable verbose mode" \
+        "   -I,--install          install this tool at /usr/local/bin/${THIS_SCRIPT_NAME,,}" \
+        "      --no-color         monochrome mode" \
+        "   -C,--color            force color even when piped" \
+        "   -h,--help             show this and exit" \
+        "" \
+        "${BOLD}Examples${NC}:" \
+        "  ${name} -e -p nas       ${BLUE}# create Raspberry Pi profile (-p is must here)${NC}" \
+        "  ${name} -sm nas         ${BLUE}# mount + ssh (daily driver)${NC}" \
+        "  ${name} -e pi           ${BLUE}# edit Raspberry Pi profile${NC}" \
+        "  ${name} --ssh -a pi     ${BLUE}# append pub keys first then ssh into remote${NC}" \
+        "  ${name} -l              ${BLUE}# show available profiles${NC}" \
         "" \
         "Config lives in ${BLUE}$(ColorPath "${D_CONFIG_DIR}")${NC}/*" \
         ""
@@ -229,13 +226,6 @@ function ColorCMD() {
         printf '%s\n' always || printf '%s\n' never\
     )" --decorations=never \
         --paging=never --language=asm <<< "${1//"$HOME"/\~}"
-}
-
-# Draw ASCII banner
-function DrawBanner() {
-    printf "%b\n" "${YELLOW}==========================" \
-                           "║ SSHFS Mount Utility    ║" \
-                           "==========================${NC}"
 }
 
 # Special message for termux users
