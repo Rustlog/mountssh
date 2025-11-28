@@ -7,7 +7,6 @@ ssh -p 8022 -i ~/.ssh/termux_id_ed25519 ssh://u0_aXXX@192.168.1.1
 sshfs -oPort=8022 -oIdentityFile=~/.ssh/termux_id_ed25519 u0_aXXX@192.168.1.1
 ```
 
-
 ## Just do
 ```bash
 mssh termux                             # mount + drop into shell
@@ -20,7 +19,7 @@ sudo mkdir -p /usr/local/bin/
 sudo install -m0755 <(sudo curl -f#SL https://raw.githubusercontent.com/Rustlog/mssh/main/mssh) /usr/local/bin/mssh
 ```
 
-## Daily commands (mssh \[FLAGS\] \[PROFILE\])
+## Daily commands ( mssh \[FLAGS\] \[PROFILE\] )
 
 ```bash
 mssh -e -p nas -c "Locally hosted NAS"  # create + comment
