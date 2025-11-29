@@ -269,7 +269,7 @@ function ShowProfile() {
         "SSH_PORT"                  "${SSH_PORT:-"[empty]"}" \
         "# Remote path to be mounted locally (default /)" \
         "REMOTE_MOUNT_POINT"        "${REMOTE_MOUNT_POINT:-"[empty]"}" \
-        "# Local path to mount remote filesystem (default /tmp/mount-[PROFILE_NAME])" \
+        "# Local path to mount remote filesystem (default XDG_RUNTIME_DIR or /tmp)" \
         "LOCAL_MOUNT_POINT"         "${LOCAL_MOUNT_POINT:-"[empty]"}" \
         "# Path to private key if remote requires PubKeyAuthentication" \
         "IDENTITY_FILE"             "${IDENTITY_FILE:-"[empty]"}" \
@@ -406,8 +406,8 @@ SSH_PORT="22"
 # Remote path to be mounted locally (default /)
 REMOTE_MOUNT_POINT="/"
 
-# Local path to mount remote filesystem (default /tmp/mount-[PROFILE_NAME])
-LOCAL_MOUNT_POINT="/tmp/mount_${PROFILE_NAME}"
+# Local path to mount remote filesystem (default XDG_RUNTIME_DIR or /tmp)
+LOCAL_MOUNT_POINT="${XDG_RUNTIME_DIR:-"/tmp"}/mssh/mount_${PROFILE_NAME}"
 
 # Path to private key if remote requires PubKeyAuthentication
 IDENTITY_FILE=""
@@ -430,10 +430,10 @@ SSH_FLAGS=( )
 DEFAULT_ACTION="both"
 
 # Network check timeout (default 1sec)
-PING_TIMEOUT=1
+PING_TIMEOUT="1"
 
 # Timeout for locally mouted remote ( default 0 = inf)
-MOUNT_TIMEOUT=0
+MOUNT_TIMEOUT="0"
 
 # vim: sts=4 sw=4 et:
 
@@ -484,8 +484,8 @@ function UnMountRemote() {
     if fusermount -u "${LOCAL_MOUNT_POINT}"; then
         log info "" "Successfully unmounted remote" \
 "(Host: '${REMOTE_HOST}', \
-RemoteMount: '${REMOTE_MOUNT_POINT}', \
-LocalMountPoint: '${LOCAL_MOUNT_POINT}')"
+RemoteMount: '$(ColorPath "${REMOTE_MOUNT_POINT}")', \
+LocalMountPoint: '$(ColorPath "${LOCAL_MOUNT_POINT}")')"
         rmdir "${LOCAL_MOUNT_POINT}" || \
             log error "" \
             "Failed to clean up dir: $(ColorPath "${LOCAL_MOUNT_POINT}")"
@@ -507,13 +507,15 @@ function MountRemote() {
     [[ "${REMOTE_USER}" == u0_a* ]] && TermuxUser
     if sshfs "${sshfs_cmd_ref[@]}"; then
         log info "" \
-            "Mounted remote '${REMOTE_USER}@${REMOTE_HOST}' at '${LOCAL_MOUNT_POINT}'"
+            "Mounted remote" \
+            "'$(ColorCMD "${REMOTE_USER}@${REMOTE_HOST}")' at '$(ColorPath "${LOCAL_MOUNT_POINT}")'"
     else
         log info "" \
-            "Failed to mount remote '${REMOTE_USER}@${REMOTE_HOST}' at '${LOCAL_MOUNT_POINT}'"
+            "Failed to mount remote" \
+            "'$(ColorCMD "${REMOTE_USER}@${REMOTE_HOST}")' at '$(ColorPath "${LOCAL_MOUNT_POINT}")'"
     fi
-    (( "$MOUNT_TIMEOUT" != "0" )) || return 0
-    log info "" "Remote at '${LOCAL_MOUNT_POINT}' will be unmounted after '$MOUNT_TIMEOUT'"
+    (( "${MOUNT_TIMEOUT}" != "0" )) || return 0
+    log info "" "Remote at '${LOCAL_MOUNT_POINT}' will be unmounted after '${MOUNT_TIMEOUT}'"
     (sleep "${MOUNT_TIMEOUT}" && printf '\n' && UnMountRemote) & disown
 }
 
