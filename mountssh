@@ -2,21 +2,21 @@
 
 #########################################################
 #
-#   mssh - mount + ssh any remote
+#   mountssh - mount + ssh any remote
 #
-#   Usage: mssh [FLAGS] [PROFILE]
+#   Usage: mountssh [FLAGS] [PROFILE]
 #
 #   Daily chores:
-#       mssh nas        -> mount + drop into shell
-#       mssh -m termux  -> only mount phone locally
-#       mssh -s pi      -> only ssh into pi
+#       mountssh nas        -> mount + drop into shell
+#       mountssh -m termux  -> only mount phone locally
+#       mountssh -s pi      -> only ssh into pi
 #
 #  @Author: Rustlog
-#  @Github: https://github.com/Rustlog/mssh
+#  @Github: https://github.com/Rustlog/mountssh
 #  @Version: v1.0
 #  @License: MIT
 #
-#  Profiles: ~/.config/mssh/[names]
+#  Profiles: ~/.config/mountssh/[names]
 #
 #########################################################
 
@@ -25,7 +25,7 @@ builtin set -euo pipefail
 
 # Global readonly vars
 readonly THIS_SCRIPT_NAME="${0##*/}"
-readonly D_CONFIG_DIR="${XDG_CONFIG_HOME:-"$HOME/.config"}/${THIS_SCRIPT_NAME}"
+readonly D_CONFIG_DIR="${XDG_CONFIG_HOME:-"$HOME/.config"}/${THIS_SCRIPT_NAME,,}"
 
 # Global mutable vars
 F_CONFIG_FILE=""
@@ -267,7 +267,7 @@ function ShowProfile() {
         "SSHFS_FLAGS"               "( ${SSHFS_FLAGS[*]} )" \
         "# Additional flags for ssh command" \
         "SSH_FLAGS"                 "( ${SSH_FLAGS[*]} )" \
-        "# Default action on 'mssh [profile]'" \
+        "# Default action on 'mountssh [profile]'" \
         "DEFAULT_ACTION"            "${DEFAULT_ACTION:-"[empty]"}" \
         "# Network check timeout (default 1sec)" \
         "PING_TIMEOUT"              "${PING_TIMEOUT:-"[empty]"}" \
@@ -393,7 +393,7 @@ SSH_PORT="22"
 REMOTE_MOUNT_POINT="/"
 
 # Local path to mount remote filesystem (default XDG_RUNTIME_DIR or /tmp)
-LOCAL_MOUNT_POINT="${XDG_RUNTIME_DIR:-"/tmp"}/mssh/mount_${PROFILE_NAME}"
+LOCAL_MOUNT_POINT="${XDG_RUNTIME_DIR:-"/tmp"}/mountssh/mount_${PROFILE_NAME}"
 
 # Path to private key if remote requires PubKeyAuthentication
 IDENTITY_FILE=""
@@ -411,7 +411,7 @@ SSHFS_FLAGS=( )
 # e.g. -4
 SSH_FLAGS=( )
 
-# Default action on 'mssh [profile]'
+# Default action on 'mountssh [profile]'
 # both=(mount+ssh), ssh=ssh, mount=mount
 DEFAULT_ACTION="both"
 
