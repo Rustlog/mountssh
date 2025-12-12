@@ -49,7 +49,7 @@ VERBOSE=0
 
 # Pretty logging
 function log() {
-    local _type="${1}" func_name="${2:-""}"
+    local _type="${1}" func_name="${2:-}"
     shift 2
     local _color="" _t=""
     if is_flag_disabled "$NO_COLOR"; then
@@ -64,10 +64,10 @@ function log() {
         _fatal_color="" _other_color="" _nc=""
     fi
     case "${_type}" in
-        info) _color="${_info_color:-""}" _t="*"    ;;
-        warn) _color="${_warn_color:-""}" _t="^"    ;;
-        error) _color="${_error_color:-""}" _t="!"  ;;
-        fatal) _color="${_fatal_color:-""}" _t="#"  ;;
+        info) _color="${_info_color:-}" _t="*"    ;;
+        warn) _color="${_warn_color:-}" _t="^"    ;;
+        error) _color="${_error_color:-}" _t="!"  ;;
+        fatal) _color="${_fatal_color:-}" _t="#"  ;;
         *) _color="${_other_color-""}" _t=""        ;;
     esac
 
@@ -133,11 +133,13 @@ sshfs + ssh tool to automate ssh related tasks${NC}" \
         "" \
         "${BOLD}other actions${NC}:" \
         "   -l,--list             list all profiles with comments" \
-        "   -e,--edit             edit/create profile" \
-        "   -d,--delete           delete profile" \
         "   -c,--comment \"msg\"    add a description when creating new profile" \
         "   -a,--append-key       append public key -> passwordless" \
         "   -p,--profile NAME     choose profile (mandatory unless -l|--cat)" \
+        "   -d,--delete           delete existing profile" \
+        "   -e,--edit             edit/create profile" \
+        "   --copy                copy existing one to new profile" \
+        "   --rename              rename existing one to new profile" \
         "   --cat                 raw cat profile" \
         "   --show                pretty print loaded profile" \
         "" \
@@ -161,7 +163,7 @@ sshfs + ssh tool to automate ssh related tasks${NC}" \
 
 # HELPER function -- Variable is not empty
 function require_var() {
-    local var="${1:-""}" _type="${2:-""}" msg="${3:-""}"
+    local var="${1:-}" _type="${2:-}" msg="${3:-}"
     [[ -n "${var}" ]] && return 0
     [[ -n "${msg}" ]] && log "${_type}" "${FUNCNAME[1]}" "${msg}"
     return 1
@@ -180,7 +182,7 @@ function require_arr() {
 
 # HELPER function -- Check file existance
 function require_file() {
-    local file="${1}" _type="${2:-""}" msg="${3:-""}"
+    local file="${1}" _type="${2:-}" msg="${3:-}"
     [[ -s "${file}" ]] && return 0
     [[ -n "${msg}" ]] && log "${_type}" "${FUNCNAME[1]}" "${msg}"
     return 1
@@ -233,20 +235,19 @@ function TermuxUser() {
 
 # Find and show available profiles in profile directory
 function ListAvailableProfiles() {
+    local -a found_profiles=()
     [[ -n "$(find "${D_CONFIG_DIR}" -type f -print -quit)" ]] || \
         { log warn "" "No profiles available under '$(ColorPath "${D_CONFIG_DIR}")/*'"; \
             return 1; }
-
     printf '%s\n' "Available profiles under '$(ColorPath "${D_CONFIG_DIR}")/*'"
-    for profile in "${D_CONFIG_DIR}"/*; do
+    mapfile -t found_profiles < <(find "${D_CONFIG_DIR}" -maxdepth 1 -mindepth 1 -type f -print)
+    for profile in "${found_profiles[@]}"; do
         printf '    %-20s %10s %s\n' "${profile##*/}" "=" "$({ \
             require_file "${profile}" && \
-            { grep -o 'COMMENT = .*' "${profile}" | \
-                cut -d'=' -f2 || \
-                printf '%s\n' "[No comment]"; } \
-        ;})"
+            { grep -o 'COMMENT = .*' "${profile}" | cut -d'=' -f2 || \
+                printf '%s\n' "[no comment]"; } \
+            ;})"
     done
-    require_var "${F_CONFIG_FILE}" || return 1
 }
 
 # Show pretty formated profile
@@ -255,33 +256,21 @@ function ShowProfile() {
         "#================#" \
         "# Profile: $(ColorPath "${F_CONFIG_FILE}") #" \
         "#=============#==========================#"
-    printf "# ${GRAY}%b${NC}\n# ${ORANGE}%-40b${NC} = %b\n\n" \
-        "# SSH user on remote (default 'root')" \
+    printf "${ORANGE}%-24b${NC} = %b\n" \
         "REMOTE_USER"               "${REMOTE_USER:-"[empty]"}" \
-        "# IP or FQDN (Fully Qualified Domain Name, e.g. ssh.example.com) addresss" \
         "REMOTE_HOST"               "${REMOTE_HOST:-"[empty]"}" \
-        "# Open port on remote (default 22)" \
         "SSH_PORT"                  "${SSH_PORT:-"[empty]"}" \
-        "# Remote path to be mounted locally (default /)" \
         "REMOTE_MOUNT_POINT"        "${REMOTE_MOUNT_POINT:-"[empty]"}" \
-        "# Local path to mount remote filesystem (default XDG_RUNTIME_DIR or /tmp)" \
         "LOCAL_MOUNT_POINT"         "${LOCAL_MOUNT_POINT:-"[empty]"}" \
-        "# Path to private key if remote requires PubKeyAuthentication" \
         "IDENTITY_FILE"             "${IDENTITY_FILE:-"[empty]"}" \
-        "# Public key for --apped-key flag, default is \${IDENTITY_FILE}.pub" \
         "PUB_KEY"                   "${PUB_KEY:-"[empty]"}" \
-        "# ssh command for sshfs -ossh_command='SSH_COMMAND'" \
         "SSH_COMMAND"               "${SSH_COMMAND:-"[empty]"}" \
-        "# Additional flags for sshfs command" \
         "SSHFS_FLAGS"               "( ${SSHFS_FLAGS[*]} )" \
-        "# Additional flags for ssh command" \
         "SSH_FLAGS"                 "( ${SSH_FLAGS[*]} )" \
-        "# Default action on 'mountssh [profile]'" \
         "DEFAULT_ACTION"            "${DEFAULT_ACTION:-"[empty]"}" \
-        "# Network check timeout (default 1sec)" \
         "PING_TIMEOUT"              "${PING_TIMEOUT:-"[empty]"}" \
-        "# Timeout for locally mouted remote ( default 0 = inf)" \
         "MOUNT_TIMEOUT"             "${MOUNT_TIMEOUT:-"[empty]"}"
+    printf '\n'
 }
 
 # Use bat command to show colorful profile, fallback to cat if bat not available
@@ -377,8 +366,11 @@ function BuildSSH_CMD() {
 
 # Meta template for newly generated profile
 function WriteTemplateProfile() {
-    local comment="${1:-""}"
+    local comment="${1:-}"
+    local xdg_runtime_dir=""
     require_var "${comment}" && comment=" ${comment}"
+    XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+    xdg_runtime_dir="${XDG_RUNTIME_DIR//${UID:-$(id -u)}/\${UID:-\$(id -u)}}"
     if cat 1> "${F_CONFIG_FILE}" << EOF
 #!/usr/bin/env false
 
@@ -401,7 +393,7 @@ SSH_PORT="22"
 REMOTE_MOUNT_POINT="/"
 
 # Local path to mount remote filesystem (default XDG_RUNTIME_DIR or /tmp)
-LOCAL_MOUNT_POINT="${XDG_RUNTIME_DIR:-"/tmp"}/mountssh/mount_${PROFILE_NAME}"
+LOCAL_MOUNT_POINT="${xdg_runtime_dir:-/tmp}/mountssh/mount_${PROFILE_NAME}"
 
 # Path to private key if remote requires PubKeyAuthentication
 IDENTITY_FILE=""
@@ -429,7 +421,7 @@ PING_TIMEOUT="1"
 # Timeout for locally mouted remote ( default 0 = inf)
 MOUNT_TIMEOUT="0"
 
-# vim: sts=4 sw=4 et:
+# vim: sts=4 sw=4 et ft=sh:
 
 EOF
     then
@@ -456,15 +448,7 @@ function ValidateProfile() {
     for key in "${key_value_pairs[@]}"; do
         declare -p "${key}" &> /dev/null || \
             log error "" "'${key}' not found in profile," \
-            "regenerate profile or add the '${key}' in profile"
-        if [[ "${key}" == "REMOTE_HOST" ]]; then
-            [[ "${!key}" == "0.0.0.0" ]] && \
-                log error "" \
-                "Invalid host found in profile " \
-                "('${PROFILE_NAME}')," \
-                "error = '${key}=${!key}'"
-            require_var "${!key}" || log error "" "${key} var is empty"
-        fi
+                "regenerate new or add the '${key}' in profile"
     done
 }
 
@@ -530,57 +514,81 @@ function main() {
             cat_profile=0 override_no_color=0 edit_profile=0 \
                 override_force_color=0  delete_profile=0  append_keys=0 \
                     list_available_profiles=0 override_verbose=0 \
-                        do_unmount=0 all_disabled=0
+                        do_unmount=0 all_disabled=0 m=0
 
     # shellcheck disable=SC2034
     local -a sshfs_cmd=()
     # shellcheck disable=SC2034
     local -a ssh_cmd=()
-
+    local -a found_profiles=()
     local requested_profile_name="" comment="" msg=""
-
-    # Check if last parameter is a profile
-    if [[ ${#@} -gt 0 ]]; then
-        last_arg="${args[-1]:-""}"
-        for profile in "${D_CONFIG_DIR}"/*; do
-            [[ "${last_arg}" == "${profile##*/}" ]] && \
-                requested_profile_name="${profile##*/}" \
-                args=("${args[@]:0:$((${#args[@]} - 1))}")
-        done
-    fi
 
     # Custom arg parser
     local arg="" value=""
     for ((i=0;i<${#args[@]};i++)); do
         arg="${args[$i]}"
-        [[ -n "${args[$((i+1))]:-""}" && "${args[$((i+1))]:-""}" != -* ]] && \
-            value="${args[$((i+1))]:-""}" i=$((i+1))
+
+        case "${arg}" in
+            --no-color)         override_no_color=1 m=1       ;;
+            -C|--color)         override_force_color=1 m=1    ;;
+            -h|--help)          show_usage=1 m=1              ;;
+            -l|--list)          list_available_profiles=1 m=1 ;;
+            -v|--verbose)       override_verbose=1 m=1        ;;
+            -a|--append*)       append_keys=1 m=1             ;;
+        esac
+
+        is_flag_enabled "$m" && continue
+
+        [[ -n "${args[$((i+1))]:-}" && "${args[$((i+1))]:-}" != -* ]] && \
+            value="${args[$((i+1))]:-}" i=$((i+1))
         if [[ "${arg}" == *=* ]]; then
             IFS=$'=' read -r arg value <<< "${arg}"
             [[ -n "${value}" ]] || \
                 { log error "'${arg}' requires a value"; return 1; }
         fi
         case "${arg}" in
-            -s|--ssh)           do_ssh_only=1                      ;;
-            -m|--mount)         do_mount_only=1                    ;;
-            -u|--u*mount)       do_unmount=1                       ;;
-            -ms|--mount*ssh)    do_mount_and_ssh=1                 ;;
-            -sm|--ssh*mount)    do_mount_and_ssh=1                 ;;
-            --show)             show_profile=1                     ;;
-            --cat)              cat_profile=1                      ;;
-            -e|--edit)          edit_profile=1                     ;;
-            --no-color)         override_no_color=1                ;;
-            -C|--color)         override_force_color=1             ;;
-            -d|--delete)        delete_profile=1                   ;;
-            -h|--help)          show_usage=1                       ;;
-            -l|--list)          list_available_profiles=1          ;;
-            -v|--verbose)       override_verbose=1                 ;;
-            -a|--append*)       append_keys=1                      ;;
-            -c|--comment)       comment="${value}"                 ;;
+            -c|--comment)       comment="${value}"                                  ;;
+            -s|--ssh)           do_ssh_only=1 requested_profile_name="${value}"     ;;
+            -m|--mount)         do_mount_only=1 requested_profile_name="${value}"   ;;
+            -u|--u*mount)       do_unmount=1 requested_profile_name="${value}"      ;;
+            -ms|--mount*ssh)    do_mount_and_ssh=1 requested_profile_name="${value}";;
+            -sm|--ssh*mount)    do_mount_and_ssh=1 requested_profile_name="${value}";;
+            --show)             show_profile=1 requested_profile_name="${value}"    ;;
+            --cat)              cat_profile=1 requested_profile_name="${value}"     ;;
+            -e|--edit)          edit_profile=1 requested_profile_name="${value}"    ;;
+            -d|--delete)        delete_profile=1 requested_profile_name="${value}"  ;;
+            -r|--rename)
+                local old_name="${value}" new_name=""
+                [[ "$(( ${#args[@]} - i ))" -ge 2 ]] || \
+                    log error "" "two args required with --rename 'old_name' 'new_name'"
+                cd "${D_CONFIG_DIR}" || \
+                    { log error "" "failed to chdir into '${D_CONFIG_DIR}'"; \
+                        return 1; }
+                [[ -n "${args[i+1]:-}" ]] || log error "" "'new_name' cannot be empty"
+                new_name="${args[i+1]:-}" i=$((i+1))
+                [[ -f "${old_name}" ]] || log error "" "'${old_name}' doesn't exist"
+                mv ./"${old_name}" ./"${new_name}" || \
+                    log error "" "failed to rename profile from '${old_name}' to '${new_name}'"
+                log info "" "successfully renamed '${old_name}' -> '${new_name}'"
+                continue ;;
+            --copy)
+                local old_name="${value}" new_name=""
+                [[ "$(( ${#args[@]} - i ))" -ge 2 ]] || \
+                    log error "" "two args required with --copy 'old_name' 'new_name'"
+                cd "${D_CONFIG_DIR}" || \
+                    { log error "" "failed to chdir into '${D_CONFIG_DIR}'"; \
+                        return 1; }
+                [[ -n "${args[i+1]:-}" ]] || log error "" "'new_name' cannot be empty"
+                new_name="${args[i+1]:-}" i=$((i+1))
+                [[ -f "${old_name}" ]] || log error "" "'${old_name}' doesn't exist"
+                cp ./"${old_name}" ./"${new_name}" || \
+                    log error "" "failed to copy profile from '${old_name}' to '${new_name}'"
+                log info "" "successfully copied '${old_name}' -> '${new_name}'"
+                continue ;;
             -p|--profile)       require_var "${requested_profile_name}" || \
                                 requested_profile_name="${value}"  ;;
             -*) log error "" "Unknown argument '${arg}'"           ;;
-            *)                  requested_profile_name="${value}"  ;;
+            *)                  requested_profile_name="${arg}"  ;;
         esac
     done
 
@@ -603,13 +611,13 @@ function main() {
     mkdir -p "${D_CONFIG_DIR}"
 
     # List available profiles
-    is_flag_enabled "$list_available_profiles" && ListAvailableProfiles
+    is_flag_enabled "$list_available_profiles" && \
+        { ListAvailableProfiles; return 0; }
 
     # Set F_CONFIG_FILE absolute path
-    require_var "${requested_profile_name}" error \
-        "No profile given, terminating" && \
-            F_CONFIG_FILE="${D_CONFIG_DIR}/${requested_profile_name}" \
-            PROFILE_NAME="${requested_profile_name}"
+    require_var "${requested_profile_name}" || return 1
+    F_CONFIG_FILE="${D_CONFIG_DIR}/${requested_profile_name}"
+    PROFILE_NAME="${requested_profile_name}"
 
     # Cat profile
     is_flag_enabled "$cat_profile" && \
@@ -635,10 +643,6 @@ function main() {
 
     # Validate requested profile
     ValidateProfile "${F_CONFIG_FILE}" || return 1
-
-    # Source profile
-    # shellcheck disable=SC1090
-    source "${F_CONFIG_FILE}"
 
     # Show profile
     is_flag_enabled "$show_profile" && \
