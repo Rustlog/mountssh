@@ -16,21 +16,21 @@
 
 #########################################################
 #
-#   mssh - mount + ssh any remote
+#   mountssh - mount + ssh any remote
 #
-#   Usage: mssh [FLAGS] [PROFILE]
+#   Usage: mountssh [FLAGS] [PROFILE]
 #
 #   Daily chores:
-#       mssh nas        -> mount + drop into shell
-#       mssh -m termux  -> only mount phone locally
-#       mssh -s pi      -> only ssh into pi
+#       mountssh nas        -> mount + drop into shell
+#       mountssh -m termux  -> only mount phone locally
+#       mountssh -s pi      -> only ssh into pi
 #
 #  @Author: Rustlog
-#  @Github: https://github.com/Rustlog/mssh
+#  @Github: https://github.com/Rustlog/mountssh
 #  @Version: v1.0
 #  @LICENSE: GPLv3
 #
-#  Profiles: ~/.config/mssh/[names]
+#  Profiles: ~/.config/mountssh/[names]
 #
 #########################################################
 
@@ -39,22 +39,20 @@ builtin set -euo pipefail
 
 # Global readonly vars
 readonly THIS_SCRIPT_NAME="${0##*/}"
-readonly D_CONFIG_DIR="${XDG_CONFIG_HOME:-"$HOME/.config"}/${THIS_SCRIPT_NAME}"
+readonly D_CONFIG_DIR="${XDG_CONFIG_HOME:-"$HOME/.config"}/${THIS_SCRIPT_NAME,,}"
 
 # Global mutable vars
 F_CONFIG_FILE=""
 PROFILE_NAME=""
-NO_COLOR=0
+NO_COLOR=1
 VERBOSE=0
-FORCE_COLOR=0
 
 # Pretty logging
 function log() {
     local _type="${1}" func_name="${2:-""}"
     shift 2
     local _color="" _t=""
-    if is_flag_disabled "$NO_COLOR" || \
-        is_flag_enabled "$FORCE_COLOR"; then
+    if is_flag_disabled "$NO_COLOR"; then
         local -g _info_color="\033[38;2;85;255;126m" \
             _warn_color="\033[38;2;255;170;10m" \
             _error_color="\033[38;2;244;29;31m" \
@@ -94,8 +92,7 @@ function SetColors() {
             LITTLE_BLUE CMD_INFO YELLOW \
                 SKIN_COL GRAY ORANGE NC
 
-    { is_flag_disabled "$NO_COLOR" || \
-        is_flag_enabled "$FORCE_COLOR"; } || return 0
+    is_flag_disabled "$NO_COLOR" || return 0
 
     RED="\033[38;2;255;75;75m"
     GREEN="\033[38;2;138;230;81m"
@@ -113,8 +110,7 @@ function SetColors() {
 # Overview of this script's usage
 function ShowUsage() {
     local RED="" GREEN="" YELLOW="" BLUE="" LIGHT_BLUE="" BOLD="" NC=""
-    if is_flag_disabled "$NO_COLOR" || \
-        is_flag_enabled "$FORCE_COLOR"; then
+    if is_flag_disabled "$NO_COLOR"; then
         local RED="\033[0;31m" GREEN="\033[0;32m" YELLOW="\033[38;2;212;184;142m" \
             BLUE="\033[38;2;126;117;255m" LIGHT_BLUE="\033[38;2;146;165;200m" \
             BOLD="\033[1m" NC="\033[0m"
@@ -125,7 +121,7 @@ function ShowUsage() {
     printf '%b\n' \
         "" \
         "  ${BOLD}${LIGHT_BLUE}${name}${NC}${BOLD}${LIGHT_BLUE} - \
-sshfs + ssh tool to automate boring ssh related tasks${NC}" \
+sshfs + ssh tool to automate ssh related tasks${NC}" \
         "" \
         "${BOLD}usage:${NC}" \
         "  ${name} [flags] ${GREEN}[profile]${NC}" \
@@ -219,11 +215,10 @@ function ColorPath() {
 
 # Pornify commands with asm
 function ColorCMD() {
-    ! command -v bat &> /dev/null && printf '%b\n' "${1}"
-    bat --color="$({ \
-        is_flag_disabled "$NO_COLOR" || \
-        is_flag_enabled "${FORCE_COLOR}"; } && \
-        printf '%s\n' always || printf '%s\n' never\
+    ! command -v bat &> /dev/null && { printf '%b\n' "${1}"; return 0; }
+    bat --color="$( \
+        is_flag_disabled "$NO_COLOR" && \
+        printf '%s\n' always || printf '%s\n' never \
     )" --decorations=never \
         --paging=never --language=asm <<< "${1//"$HOME"/\~}"
 }
@@ -239,7 +234,7 @@ function TermuxUser() {
 # Find and show available profiles in profile directory
 function ListAvailableProfiles() {
     [[ -n "$(find "${D_CONFIG_DIR}" -type f -print -quit)" ]] || \
-        { log "" warn "No profiles available under '$(ColorPath "${D_CONFIG_DIR}")/*'"; \
+        { log warn "" "No profiles available under '$(ColorPath "${D_CONFIG_DIR}")/*'"; \
             return 1; }
 
     printf '%s\n' "Available profiles under '$(ColorPath "${D_CONFIG_DIR}")/*'"
@@ -281,7 +276,7 @@ function ShowProfile() {
         "SSHFS_FLAGS"               "( ${SSHFS_FLAGS[*]} )" \
         "# Additional flags for ssh command" \
         "SSH_FLAGS"                 "( ${SSH_FLAGS[*]} )" \
-        "# Default action on 'mssh [profile]'" \
+        "# Default action on 'mountssh [profile]'" \
         "DEFAULT_ACTION"            "${DEFAULT_ACTION:-"[empty]"}" \
         "# Network check timeout (default 1sec)" \
         "PING_TIMEOUT"              "${PING_TIMEOUT:-"[empty]"}" \
@@ -292,9 +287,8 @@ function ShowProfile() {
 # Use bat command to show colorful profile, fallback to cat if bat not available
 function CatProfile() {
     ! command -v bat &> /dev/null && { cat "${F_CONFIG_FILE}"; return 0; }
-    bat --color="$({ \
-        is_flag_disabled "$NO_COLOR" || \
-            is_flag_enabled "$FORCE_COLOR"; } && \
+    bat --color="$(\
+        is_flag_disabled "$NO_COLOR" && \
         printf '%s\n' always || printf '%s\n' never \
     )" --decorations=never --paging=never --language=bash "${F_CONFIG_FILE}"
 }
@@ -407,7 +401,7 @@ SSH_PORT="22"
 REMOTE_MOUNT_POINT="/"
 
 # Local path to mount remote filesystem (default XDG_RUNTIME_DIR or /tmp)
-LOCAL_MOUNT_POINT="${XDG_RUNTIME_DIR:-"/tmp"}/mssh/mount_${PROFILE_NAME}"
+LOCAL_MOUNT_POINT="${XDG_RUNTIME_DIR:-"/tmp"}/mountssh/mount_${PROFILE_NAME}"
 
 # Path to private key if remote requires PubKeyAuthentication
 IDENTITY_FILE=""
@@ -425,7 +419,7 @@ SSHFS_FLAGS=( )
 # e.g. -4
 SSH_FLAGS=( )
 
-# Default action on 'mssh [profile]'
+# Default action on 'mountssh [profile]'
 # both=(mount+ssh), ssh=ssh, mount=mount
 DEFAULT_ACTION="both"
 
@@ -545,16 +539,15 @@ function main() {
 
     local requested_profile_name="" comment="" msg=""
 
-    # Return if no argument passed
-    [[ ${#args[@]} -ne 0 ]] || return 1
-
     # Check if last parameter is a profile
-    last_arg="${args[$((${#args[@]}-1))]}"
-    for profile in "${D_CONFIG_DIR}"/*; do
-        [[ "${last_arg}" == "${profile##*/}" ]] && \
-            requested_profile_name="${profile##*/}" \
-            args=("${args[@]:0:$((${#args[@]} - 1))}")
-    done
+    if [[ ${#@} -gt 0 ]]; then
+        last_arg="${args[-1]:-""}"
+        for profile in "${D_CONFIG_DIR}"/*; do
+            [[ "${last_arg}" == "${profile##*/}" ]] && \
+                requested_profile_name="${profile##*/}" \
+                args=("${args[@]:0:$((${#args[@]} - 1))}")
+        done
+    fi
 
     # Custom arg parser
     local arg="" value=""
@@ -591,19 +584,23 @@ function main() {
         esac
     done
 
-    mkdir -p "${D_CONFIG_DIR}"
+    [[ -t 1 ]] && NO_COLOR=0
 
      # Global Overrides
-    { is_flag_enabled "$override_no_color" || [[ ! -t 1 ]]; } && \
-        NO_COLOR=1
-    is_flag_enabled "$override_force_color" && FORCE_COLOR=1
+    is_flag_enabled "$override_no_color" && NO_COLOR=1
+    is_flag_enabled "$override_force_color" && NO_COLOR=0
     is_flag_enabled "$override_verbose" && VERBOSE=1
 
     # Enable colors
     SetColors
 
+    [[ ${#@} -eq 0 ]] && log error "" \
+        "Not sure what to do? use --help I'll tell you everything."
+
     # Show Usage
     is_flag_enabled "$show_usage" && { ShowUsage; return 0; }
+
+    mkdir -p "${D_CONFIG_DIR}"
 
     # List available profiles
     is_flag_enabled "$list_available_profiles" && ListAvailableProfiles
