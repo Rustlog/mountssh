@@ -21,12 +21,13 @@
 #   Usage: mssh [FLAGS] [PROFILE]
 #
 #   Daily chores:
-#       mssh nas        -> mount + drop into  shell
+#       mssh nas        -> mount + drop into shell
 #       mssh -m termux  -> only mount phone locally
 #       mssh -s pi      -> only ssh into pi
 #
-#  @Github: https://github.com/Rustlog/mssh
 #  @Author: Rustlog
+#  @Github: https://github.com/Rustlog/mssh
+#  @Version: v1.0
 #  @LICENSE: GPLv3
 #
 #  Profiles: ~/.config/mssh/[names]
@@ -36,11 +37,11 @@
 # Error on non-zero status -> exit, unset var, or cmd fails early in pipe
 builtin set -euo pipefail
 
-# Globals vars
-
-readonly D_CONFIG_DIR="${XDG_CONFIG_HOME:-"$HOME/.config"}/${THIS_SCRIPT_NAME}"
+# Global readonly vars
 readonly THIS_SCRIPT_NAME="${0##*/}"
+readonly D_CONFIG_DIR="${XDG_CONFIG_HOME:-"$HOME/.config"}/${THIS_SCRIPT_NAME}"
 
+# Global mutable vars
 F_CONFIG_FILE=""
 PROFILE_NAME=""
 NO_COLOR=0
@@ -194,15 +195,23 @@ function require_file() {
 
 # HELPER function -- Check enabled state
 function is_flag_enabled() {
-    local -i var=${1}
-    [[ "$var" -eq 1 ]] && return 0
+    local -i flag=${1}
+    [[ "$flag" -eq 1 ]] && return 0
     return 1
+}
+
+# HELPER function -- Check enabled state for all
+function are_flags_disabled() {
+    local -a flags=("${@}")
+    for flag in "${flags[@]}"; do
+        [[ "$flag" -eq 0 ]] || return 1
+    done
 }
 
 # HELPER function -- Check disabled state
 function is_flag_disabled() {
-    local -i var=${1}
-    [[ "$var" -eq 0 ]] && return 0
+    local -i flag=${1}
+    [[ "$flag" -eq 0 ]] && return 0
     return 1
 }
 
@@ -233,7 +242,7 @@ function DrawBanner() {
 function TermuxUser() {
     log info "" "The termux default user home directory" \
         "'${LITTLE_BLUE}${LOCAL_MOUNT_POINT}/data/data/com.termux/files/home${NC}'"
-    log info "" "Phone's internal stroage filesystem" \
+    log info "" "Phone's internal filesystem" \
         "'${LITTLE_BLUE}${LOCAL_MOUNT_POINT}/storage/emulated/0/${NC}'"
 }
 
@@ -505,6 +514,7 @@ function MountRemote() {
     mkdir -p "${LOCAL_MOUNT_POINT}"
     log info "" "Mounting remote '${REMOTE_HOST}' from '$(ColorPath "${F_CONFIG_FILE}")'"
     log cmd_info "" "$(ColorCMD "sshfs ${sshfs_cmd_ref[*]}")"
+    [[ "${REMOTE_USER}" == u0_a* ]] && TermuxUser
     if sshfs "${sshfs_cmd_ref[@]}"; then
         log info "" \
             "Mounted remote '${REMOTE_USER}@${REMOTE_HOST}' at '${LOCAL_MOUNT_POINT}'"
@@ -521,7 +531,6 @@ function MountRemote() {
 function SSHRemote() {
     local -n ssh_cmd_ref
     ssh_cmd_ref=${1}
-    [[ "${REMOTE_USER}" == u0_a* ]] && TermuxUser
     log cmd_info "" "$(ColorCMD "ssh ${ssh_cmd_ref[*]}")"
     ssh "${ssh_cmd_ref[@]}"
 }
@@ -535,7 +544,7 @@ function main() {
             cat_profile=0 override_no_color=0 edit_profile=0 \
                 override_force_color=0  delete_profile=0  append_keys=0 \
                     list_available_profiles=0 override_verbose=0 \
-                        do_unmount=0
+                        do_unmount=0 all_disabled=0
 
     # shellcheck disable=SC2034
     local -a sshfs_cmd=()
@@ -656,42 +665,62 @@ function main() {
     # Append pub key to remote
     is_flag_enabled "$append_keys" && AppendKey
 
+
+    # All flags are disabled
+    are_flags_disabled "$do_mount_and_ssh" \
+        "$do_ssh_only" "$do_mount_only" && \
+            all_disabled=1
+
     if is_flag_enabled "$do_mount_and_ssh" || \
+        { [[ "${DEFAULT_ACTION}" == "both" ]] && \
+                is_flag_enabled "$all_disabled"; }; then
         # Mount and SSH
-        [[ "${DEFAULT_ACTION}" == "both" ]]; then
         msg="Mount and SSH into remote"
         { require_var "${DEFAULT_ACTION}" && \
-            is_flag_disabled "$do_mount_and_ssh"; } && \
+            is_flag_enabled "$all_disabled"; } && \
                 msg="${msg} (default action)"
         is_flag_enabled "$VERBOSE" && \
-            printf '\n%s\n' "=> ${msg} <=" && printf '\n'
+            printf '\n%s\n' "===> ${msg} <===" && printf '\n'
+
+        is_flag_enabled "$VERBOSE" && \
+            printf '%s\n' "===> mount"
         # Mount remote locally
         BuildSSHFS_CMD sshfs_cmd
         MountRemote sshfs_cmd
+
         # SSH into remote
-        printf '%s\n' "=> SSH"
+        is_flag_enabled "$VERBOSE" && \
+            printf '%s\n' "===> ssh"
         BuildSSH_CMD ssh_cmd
         SSHRemote ssh_cmd
+
     elif is_flag_enabled "$do_ssh_only" || \
+        { [[ "${DEFAULT_ACTION}" == "ssh" ]] && \
+                is_flag_enabled "$all_disabled"; }; then
         # SSH only
-        [[ "${DEFAULT_ACTION}" == "ssh" ]]; then
         msg="SSH only"
         { require_var "${DEFAULT_ACTION}" && \
-            is_flag_disabled "$do_ssh_only"; } && \
+            is_flag_enabled "$all_disabled"; } && \
                 msg="${msg} (default action)"
+
         is_flag_enabled "$VERBOSE" && \
-            printf '\n%s\n' "=> ${msg} <=" && printf '\n'
+            printf '\n%s\n' "===> ${msg} <===" && printf '\n'
+
         BuildSSH_CMD ssh_cmd
         SSHRemote ssh_cmd
+
     elif is_flag_enabled "$do_mount_only" || \
+        { [[ "${DEFAULT_ACTION}" == "mount" ]] && \
+                is_flag_enabled "$all_disabled"; }; then
         # Mount only
-        [[ "${DEFAULT_ACTION}" == "mount" ]]; then
         msg="Mount only"
         { require_var "${DEFAULT_ACTION}" && \
-            is_flag_disabled "$do_mount_only"; } && \
+            is_flag_enabled "$all_disabled"; } && \
                 msg="${msg} (default action)"
+
         is_flag_enabled "$VERBOSE" && \
-            printf '\n%s\n' "=> ${msg} <=" && printf '\n'
+            printf '\n%s\n' "===> ${msg} <===" && printf '\n'
+
         BuildSSHFS_CMD sshfs_cmd
         MountRemote sshfs_cmd
     fi
