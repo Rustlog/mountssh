@@ -40,33 +40,49 @@ LICENSE="GPLv3"
 REMOTE_REPO="https://github.com/Rustlog/mountssh"
 
 # Global readonly vars
-THIS_SCRIPT_NAME="${0##*/}"
-D_CONFIG_DIR="${XDG_CONFIG_HOME:-"$HOME/.config"}/${THIS_SCRIPT_NAME,,}"
+PROGRAM_NAME="${0##*/}"
+D_CONFIG_DIR="${XDG_CONFIG_HOME:-"$HOME/.config"}/${PROGRAM_NAME,,}"
 builtin readonly VERSION AUTHOR LICENSE REMOTE_REPO \
-    THIS_SCRIPT_NAME D_CONFIG_DIR
+    PROGRAM_NAME D_CONFIG_DIR
 
 # Global mutable vars
 F_CONFIG_FILE=""
 PROFILE_NAME=""
 NO_COLOR=1
+LOGLEVEL=2
 VERBOSE=0
 
 # Pretty logging
 function log() {
-    local _type="${1}" func_name="${2:-}"
-    shift 2
+    local _type="${1}"; shift 1
     local _color="" _t=""
+    local default_loglevel=2 severity=0
+    local _info_color="" _warn_color="" _error_color="" \
+        _fatal_color="" _other_color="" _nc=""
+
+    local -A loglevel=(
+        [error]=1
+        [warn]=1
+        [fatal]=1
+        [cmd_error]=1
+        [info]=2
+        [cmd_info]=2
+        [debug]=3
+    )
+
+    severity="${loglevel[$_type]:-${default_loglevel}}"
+
+    (( LOGLEVEL >= severity )) || return 0
+
     if is_flag_disabled "$NO_COLOR"; then
-        local -g _info_color="\033[38;2;85;255;126m" \
+        local _info_color="\033[38;2;85;255;126m" \
             _warn_color="\033[38;2;255;170;10m" \
             _error_color="\033[38;2;244;29;31m" \
             _fatal_color="\033[5m\033[38;2;255;0;0m" \
             _other_color="\033[38;2;251;255;208m" \
             _nc="\033[0m"
-    else
-        _info_color="" _warn_color="" _error_color=""
-        _fatal_color="" _other_color="" _nc=""
     fi
+
     case "${_type}" in
         info) _color="${_info_color:-}" _t="*"    ;;
         warn) _color="${_warn_color:-}" _t="^"    ;;
@@ -75,14 +91,8 @@ function log() {
         *) _color="${_other_color-""}" _t=""        ;;
     esac
 
-    if [[ $VERBOSE -eq 1 ]]; then
-        printf "[%b%s%b%s]: %s: %b\n" \
-            "${_color}" "${_type}" "${_nc}" "${_t}" \
-            "${func_name:-"${FUNCNAME[1]}"}()" "${*}"
-    else
-        printf "[%b%s%b%s]: %b\n" \
-            "${_color}" "${_type}" "${_nc}" "${_t}" "${*}"
-    fi
+    printf "[%b%s%b%s]: %b\n" \
+        "${_color}" "${_type}" "${_nc}" "${_t}" "${*}"
 
     [[ "${_type}" =~ ^(error|fatal)$ ]] && exit 1 || true
 }
@@ -120,7 +130,7 @@ function ShowUsage() {
             BOLD="\033[1m" NC="\033[0m"
     fi
 
-    local n="${YELLOW}${THIS_SCRIPT_NAME}${NC}"
+    local n="${YELLOW}${PROGRAM_NAME}${NC}"
 
     printf '%b\n' \
         "" \
@@ -148,7 +158,7 @@ sshfs + ssh tool to automate ssh related tasks${NC}" \
         "" \
         "${BOLD}extras${NC}:" \
         "   -v,--verbose          enable verbose mode" \
-        "   -I,--install          install this tool at /usr/local/bin/${THIS_SCRIPT_NAME,,}" \
+        "   -I,--install          install this tool at /usr/local/bin/${PROGRAM_NAME,,}" \
         "      --no-color         force no color" \
         "   -C,--color            force color even when piped" \
         "   -v,--help             show this help and exit" \
@@ -172,7 +182,7 @@ sshfs + ssh tool to automate ssh related tasks${NC}" \
 function require_var() {
     local var="${1:-}" _type="${2:-}" msg="${3:-}"
     [[ -n "${var}" ]] && return 0
-    [[ -n "${msg}" ]] && log "${_type}" "${FUNCNAME[1]}" "${msg}"
+    [[ -n "${msg}" ]] && log "${_type}" "${msg}"
     return 1
 }
 
@@ -191,7 +201,7 @@ function require_arr() {
 function require_file() {
     local file="${1}" _type="${2:-}" msg="${3:-}"
     [[ -s "${file}" ]] && return 0
-    [[ -n "${msg}" ]] && log "${_type}" "${FUNCNAME[1]}" "${msg}"
+    [[ -n "${msg}" ]] && log "${_type}" "${msg}"
     return 1
 }
 
@@ -240,21 +250,47 @@ function ShowInfo() {
     esac
 }
 
+# Update program itself
+function UpdateMe() {
+    local program_realpath
+    local url="https://raw.githubusercontent.com/${AUTHOR}/${PROGRAM_NAME}/main/bin/mountssh"
+    program_realpath="$(readlink -f "${0}")"
+    program_name="${program_realpath##*/}" program_dir="${program_realpath%/*}"
+    log cmd_info "$(ColorCMD "cd ${program_dir}")"
+    cd "${program_dir}" || { log error "failed to chdir to '${program_dir}'"; return 1; }
+    if command -v "curl" &> /dev/null; then
+        log cmd_info "$(ColorCMD "sudo curl -f#SLC- -o ./${program_name}.download ${url}")"
+        sudo curl -"f#SLC-" -o ./"${program_name}.download" "${url}" || \
+            { log error "failed to download program '${program_name}'"; return 1; }
+    elif command -v "wget" &> /dev/null; then
+        log cmd_info "$(ColorCMD "sudo wget -nv \
+--show-progress --progress=bar:force --continue --output-document=./${program_name}.download ${url}")"
+        sudo wget -nv --show-progress \
+            --progress=bar:force --continue \
+            --output-document=./"${program_name}.download" "${url}" || \
+            { log error "failed to download program '${program_name}'"; return 1; }
+    else
+        log error "'curl' or 'wget' not found on system to update the program"; return 1
+    fi
+    sudo mv ./"${program_name}.download" "${program_name}" || \
+        { log error "failed to move program '${program_name}.download' '${program_name}'"; return 1; }
+}
+
 # Pornify commands with asm
 function ColorCMD() {
-    ! command -v bat &> /dev/null && { printf '%b\n' "${1}"; return 0; }
+    ! command -v bat &> /dev/null && { printf '%b\n' "${1//$HOME/\~}"; return 0; }
     bat --color="$( \
         is_flag_disabled "$NO_COLOR" && \
         printf '%s\n' always || printf '%s\n' never \
     )" --decorations=never \
-        --paging=never --language=asm <<< "${1//"$HOME"/\~}"
+        --paging=never --language=asm <<< "${1//$HOME/\~}"
 }
 
 # Special message for termux users
 function TermuxUser() {
-    log info "" "the termux default user home directory" \
+    log info "the termux default user home directory" \
         "'${LITTLE_BLUE}${LOCAL_MOUNT_POINT}/data/data/com.termux/files/home${NC}'"
-    log info "" "phone's internal filesystem" \
+    log info "phone's internal filesystem" \
         "'${LITTLE_BLUE}${LOCAL_MOUNT_POINT}/storage/emulated/0/${NC}'"
 }
 
@@ -262,7 +298,7 @@ function TermuxUser() {
 function ListAvailableProfiles() {
     local -a found_profiles=()
     [[ -n "$(find "${D_CONFIG_DIR}" -type f -print -quit)" ]] || \
-        { log warn "" "no profiles available under '$(ColorPath "${D_CONFIG_DIR}")/*'"; \
+        { log warn "no profiles available under '$(ColorPath "${D_CONFIG_DIR}")/*'"; \
             return 1; }
     printf '%s\n' "available profiles '($(ColorPath "${D_CONFIG_DIR}")/*)'"
     mapfile -t found_profiles < <(find "${D_CONFIG_DIR}" -maxdepth 1 -mindepth 1 -type f -print)
@@ -315,19 +351,19 @@ function CatProfile() {
 
 # Delete requested profile
 function DeleteProfile() {
-    cd "${D_CONFIG_DIR}" || log error "" \
+    cd "${D_CONFIG_DIR}" || log error \
         "failed to chdir into '${D_CONFIG_DIR}'"
     if rm ./"${PROFILE_NAME}"; then
-        log info "" "profile deleted '${PROFILE_NAME}'"
+        log info "profile deleted '${PROFILE_NAME}'"
     else
-        log error "" "failed to delete '${PROFILE_NAME}'"
+        log error "failed to delete '${PROFILE_NAME}'"
     fi
 }
 
 # Check if remote is alive
 function PingRemote() {
     ping -W "${PING_TIMEOUT}" -c 1 "${REMOTE_HOST}" &> /dev/null || \
-        log error "" "host unreachable '${REMOTE_HOST}'"
+        log error "host unreachable '${REMOTE_HOST}'"
 }
 
 # Check mount check, if mounted return 0
@@ -349,10 +385,10 @@ function AppendKey() {
     local F="\~/.ssh/authorized_keys"
     if ssh "ssh://${REMOTE_USER}@${REMOTE_HOST}:${SSH_PORT}" \
         "cat >> ~/.ssh/authorized_keys" < "${IDENTITY_FILE//\~/"$HOME"}.pub"; then
-        log info "" "public key '${IDENTITY_FILE//"$HOME"/\~}.pub'" \
+        log info "public key '${IDENTITY_FILE//"$HOME"/\~}.pub'" \
             "append in $F at '${REMOTE_HOST}'"
     else
-        log info "" "failed to append public key '${IDENTITY_FILE//"$HOME"/\~}.pub'" \
+        log info "failed to append public key '${IDENTITY_FILE//"$HOME"/\~}.pub'" \
             "in $F at remote '${REMOTE_HOST}'"
     fi
 }
@@ -456,10 +492,10 @@ MOUNT_TIMEOUT="0"
 
 EOF
     then
-        log info "" \
+        log info \
             "new config profile created at '$(ColorPath "${F_CONFIG_FILE}")'"
     else
-        log info "" \
+        log info \
             "failed to create profile at '$(ColorPath "${F_CONFIG_FILE}")'"
     fi
 }
@@ -478,7 +514,7 @@ function ValidateProfile() {
 
     for key in "${key_value_pairs[@]}"; do
         declare -p "${key}" &> /dev/null || \
-            log error "" "'${key}' not found in profile," \
+            log error "'${key}' not found in profile," \
                 "regenerate new or add the '${key}' in profile"
     done
 }
@@ -491,16 +527,16 @@ function EditProfile() {
 # Unmount remote
 function UnMountRemote() {
     if fusermount -u "${LOCAL_MOUNT_POINT}"; then
-        log info "" "successfully unmounted remote" \
+        log info "successfully unmounted remote" \
 "(Host: '${REMOTE_HOST}', \
 RemoteMount: '$(ColorPath "${REMOTE_MOUNT_POINT}")', \
 LocalMountPoint: '$(ColorPath "${LOCAL_MOUNT_POINT}")')"
         rmdir "${LOCAL_MOUNT_POINT}" || \
-            log error "" \
+            log error \
             "failed to clean up dir: $(ColorPath "${LOCAL_MOUNT_POINT}")"
     else
-        log error "" "failed to unmount reomte '${LOCAL_MOUNT_POINT}'"
-        log info "" "proccess using '${LOCAL_MOUNT_POINT}'"
+        log error "failed to unmount reomte '${LOCAL_MOUNT_POINT}'"
+        log info "proccess using '${LOCAL_MOUNT_POINT}'"
         lsof "${LOCAL_MOUNT_POINT}"
     fi
 }
@@ -513,20 +549,24 @@ function MountRemote() {
     CheckMountPoint && UnMountRemote
 
     mkdir -p "${LOCAL_MOUNT_POINT}"
-    log info "" "mounting remote '${REMOTE_HOST}' from '$(ColorPath "${F_CONFIG_FILE}")'"
-    log cmd_info "" "$(ColorCMD "sshfs ${sshfs_cmd_ref[*]}")"
-    [[ "${REMOTE_USER}" == u0_a* ]] && TermuxUser
-    if sshfs "${sshfs_cmd_ref[@]}"; then
-        log info "" \
-            "mounted remote" \
-            "'$(ColorCMD "${REMOTE_USER}@${REMOTE_HOST}")' at '$(ColorPath "${LOCAL_MOUNT_POINT}")'"
-    else
-        log info "" \
+
+    log info "mounting remote '${REMOTE_HOST}' from '$(ColorPath "${F_CONFIG_FILE}")'"
+    log cmd_info "$(ColorCMD "sshfs ${sshfs_cmd_ref[*]}")"
+
+    if ! sshfs "${sshfs_cmd_ref[@]}"; then
+        log error \
             "failed to mount remote" \
             "'$(ColorCMD "${REMOTE_USER}@${REMOTE_HOST}")' at '$(ColorPath "${LOCAL_MOUNT_POINT}")'"
+        return 1
     fi
+
+    [[ "${REMOTE_USER}" == u0_a* ]] && TermuxUser
+    log info \
+        "mounted remote" \
+        "'$(ColorCMD "${REMOTE_USER}@${REMOTE_HOST}")' at '$(ColorPath "${LOCAL_MOUNT_POINT}")'"
+
     (( "${MOUNT_TIMEOUT}" != "0" )) || return 0
-    log info "" "Remote at '${LOCAL_MOUNT_POINT}' will be unmounted after '${MOUNT_TIMEOUT}'"
+    log info "Remote at '${LOCAL_MOUNT_POINT}' will be unmounted after '${MOUNT_TIMEOUT}'"
     (sleep "${MOUNT_TIMEOUT}" && printf '\n' && UnMountRemote) & disown
 }
 
@@ -534,7 +574,7 @@ function MountRemote() {
 function SSHRemote() {
     local -n ssh_cmd_ref
     ssh_cmd_ref=${1}
-    log cmd_info "" "$(ColorCMD "ssh ${ssh_cmd_ref[*]}")"
+    log cmd_info "$(ColorCMD "ssh ${ssh_cmd_ref[*]}")"
     ssh "${ssh_cmd_ref[@]}"
 }
 
@@ -555,6 +595,8 @@ function main() {
     local -a found_profiles=()
     local requested_profile_name="" comment="" msg=""
 
+    [[ -t 1 ]] && NO_COLOR=0
+
     # Custom arg parser
     local arg="" value=""
     for ((i=0;i<${#args[@]};i++)); do
@@ -572,6 +614,7 @@ function main() {
             --license)          ShowInfo license; return 0    ;;
             --repo)             ShowInfo repo; return 0       ;;
             --about)            ShowInfo about; return 0      ;;
+            --update*)          UpdateMe || return 1; return 0 ;;
         esac
 
         is_flag_enabled "$m" && continue
@@ -585,6 +628,7 @@ function main() {
         fi
         case "${arg}" in
             -c|--comment)       comment="${value}"                                  ;;
+            --loglevel)         LOGLEVEL="${value}"                                 ;;
             -s|--ssh)           do_ssh_only=1 requested_profile_name="${value}"     ;;
             -m|--mount)         do_mount_only=1 requested_profile_name="${value}"   ;;
             -u|--u*mount)       do_unmount=1 requested_profile_name="${value}"      ;;
@@ -597,49 +641,47 @@ function main() {
             -R|--rename)
                 local old_name="${value}" new_name=""
                 [[ "$(( ${#args[@]} - i ))" -ge 2 ]] || \
-                    log error "" "two args required with --rename 'old_name' 'new_name'"
+                    log error "two args required with --rename 'old_name' 'new_name'"
                 cd "${D_CONFIG_DIR}" || \
-                    { log error "" "failed to chdir into '${D_CONFIG_DIR}'"; \
+                    { log error "failed to chdir into '${D_CONFIG_DIR}'"; \
                         return 1; }
-                [[ -n "${args[i+1]:-}" ]] || log error "" "'new_name' cannot be empty"
+                [[ -n "${args[i+1]:-}" ]] || log error "'new_name' cannot be empty"
                 new_name="${args[i+1]:-}" i=$((i+1))
-                [[ -f "${old_name}" ]] || log error "" "'${old_name}' doesn't exist"
+                [[ -f "${old_name}" ]] || log error "'${old_name}' doesn't exist"
                 mv ./"${old_name}" ./"${new_name}" || \
-                    log error "" "failed to rename profile from '${old_name}' to '${new_name}'"
-                log info "" "successfully renamed '${old_name}' -> '${new_name}'"
+                    log error "failed to rename profile from '${old_name}' to '${new_name}'"
+                log info "successfully renamed '${old_name}' -> '${new_name}'"
                 continue ;;
             -C|--copy)
                 local old_name="${value}" new_name=""
                 [[ "$(( ${#args[@]} - i ))" -ge 2 ]] || \
-                    log error "" "two args required with --copy 'old_name' 'new_name'"
+                    log error "two args required with --copy 'old_name' 'new_name'"
                 cd "${D_CONFIG_DIR}" || \
-                    { log error "" "failed to chdir into '${D_CONFIG_DIR}'"; \
+                    { log error "failed to chdir into '${D_CONFIG_DIR}'"; \
                         return 1; }
-                [[ -n "${args[i+1]:-}" ]] || log error "" "'new_name' cannot be empty"
+                [[ -n "${args[i+1]:-}" ]] || log error "'new_name' cannot be empty"
                 new_name="${args[i+1]:-}" i=$((i+1))
-                [[ -f "${old_name}" ]] || log error "" "'${old_name}' doesn't exist"
+                [[ -f "${old_name}" ]] || log error "'${old_name}' doesn't exist"
                 cp ./"${old_name}" ./"${new_name}" || \
-                    log error "" "failed to copy profile from '${old_name}' to '${new_name}'"
-                log info "" "successfully copied '${old_name}' -> '${new_name}'"
+                    log error "failed to copy profile from '${old_name}' to '${new_name}'"
+                log info "successfully copied '${old_name}' -> '${new_name}'"
                 continue ;;
             -p|--profile)       require_var "${requested_profile_name}" || \
-                                requested_profile_name="${value}"  ;;
-            -*) log error "" "unknown argument '${arg}'"           ;;
-            *)                  requested_profile_name="${arg}"  ;;
+                                requested_profile_name="${value}"       ;;
+            -*) log error "unknown argument '${arg}'"                   ;;
+            *)                  requested_profile_name="${arg}"         ;;
         esac
     done
-
-    [[ -t 1 ]] && NO_COLOR=0
 
      # Global Overrides
     is_flag_enabled "$override_no_color" && NO_COLOR=1
     is_flag_enabled "$override_force_color" && NO_COLOR=0
-    is_flag_enabled "$override_verbose" && VERBOSE=1
+    { is_flag_enabled "$override_verbose" || [[ "$LOGLEVEL" -ge 3 ]] ; } && VERBOSE=1
 
     # Enable colors
     SetColors
 
-    [[ ${#@} -eq 0 ]] && log error "" \
+    [[ ${#@} -eq 0 ]] && log error \
         "not sure what to do? use --help I'll tell you everything."
 
     # Show Usage
@@ -680,7 +722,7 @@ function main() {
 
     # Validate requested profile
     ValidateProfile "${F_CONFIG_FILE}" || \
-        { log error "" "validation check failed for '$(ColorPath "${F_CONFIG_FILE}")'"; \
+        { log error "validation check failed for '$(ColorPath "${F_CONFIG_FILE}")'"; \
             return 1; }
 
     # Show profile
